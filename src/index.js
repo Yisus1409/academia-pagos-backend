@@ -22,10 +22,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: ['http://localhost:5173'], credentials: true }));
+// CORS abierto para desarrollo y producción
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean),
+  credentials: true,
+}));
+
 app.use(express.json());
 
-// Servir archivos subidos estáticamente
+// Servir archivos subidos
 app.use('/uploads', express.static(path.resolve(__dirname, '../../uploads')));
 
 app.use('/api/auth', authRoutes);
@@ -40,7 +49,7 @@ app.use('/api/pagos', pagosRoutes);
 app.use('/api/uploads', uploadsRoutes);
 app.use('/api/config', configRoutes);
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', env: process.env.NODE_ENV }));
 app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 
 app.listen(PORT, () => console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`));
