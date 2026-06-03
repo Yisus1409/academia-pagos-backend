@@ -1,0 +1,7 @@
+node_modules/
+database.sqlite
+.env
+uploads/avatares/*
+uploads/comprobantes/*
+!uploads/avatares/.gitkeep
+!uploads/comprobantes/.gitkeep
