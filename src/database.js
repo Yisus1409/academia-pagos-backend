@@ -67,16 +67,20 @@ async function initDB() {
       t.string('nombre').notNullable();
       t.string('descripcion');
       t.float('monto_usd').notNullable();
-      t.float('recargo_mora_pct').defaultTo(0);
+      t.float('recargo_mora_pct').defaultTo(5);
       t.float('descuento_pronto_pct').defaultTo(0);
-      t.integer('dias_gracia').defaultTo(0);
+      t.integer('dias_gracia').defaultTo(5);
       t.boolean('activa').defaultTo(true);
     });
   } else {
-    for (const col of ['recargo_mora_pct', 'descuento_pronto_pct', 'dias_gracia']) {
+    for (const [col, type, def] of [
+      ['recargo_mora_pct','float',5],
+      ['descuento_pronto_pct','float',0],
+      ['dias_gracia','integer',5]
+    ]) {
       const has = await db.schema.hasColumn('categorias', col);
       if (!has) await db.schema.alterTable('categorias', t => {
-        col === 'dias_gracia' ? t.integer(col).defaultTo(0) : t.float(col).defaultTo(0);
+        type === 'integer' ? t.integer(col).defaultTo(def) : t.float(col).defaultTo(def);
       });
     }
   }
@@ -114,16 +118,22 @@ async function initDB() {
       t.float('descuento_usd').defaultTo(0);
       t.string('concepto').defaultTo('Mensualidad');
       t.string('mes').notNullable();
+      t.boolean('multa_aplicada').defaultTo(false);
       t.enu('status', ['pending', 'paid', 'overdue']).defaultTo('pending');
       t.date('fecha_vencimiento').notNullable();
       t.timestamp('pagado_en');
       t.timestamp('created_at').defaultTo(db.fn.now());
     });
   } else {
-    for (const [col, type] of [['recargo_usd','float'],['descuento_usd','float'],['concepto','string']]) {
+    for (const [col, type] of [
+      ['recargo_usd','float'],['descuento_usd','float'],
+      ['concepto','string'],['multa_aplicada','boolean']
+    ]) {
       const has = await db.schema.hasColumn('cargos_mensuales', col);
       if (!has) await db.schema.alterTable('cargos_mensuales', t => {
-        type === 'float' ? t.float(col).defaultTo(0) : t.string(col).defaultTo('Mensualidad');
+        if (type === 'float') t.float(col).defaultTo(0);
+        else if (type === 'boolean') t.boolean(col).defaultTo(false);
+        else t.string(col).defaultTo('Mensualidad');
       });
     }
   }
@@ -154,9 +164,9 @@ async function initDB() {
     });
   } else {
     const cols = [
-      ['tipo', 'string'], ['referencia_manual', 'string'],
-      ['banco_origen', 'string'], ['fecha_pago_manual', 'string'],
-      ['comprobante_url', 'string'], ['motivo_rechazo', 'text'],
+      ['tipo','string'],['referencia_manual','string'],
+      ['banco_origen','string'],['fecha_pago_manual','string'],
+      ['comprobante_url','string'],['motivo_rechazo','text'],
     ];
     for (const [col, type] of cols) {
       const has = await db.schema.hasColumn('pagos', col);
@@ -164,8 +174,6 @@ async function initDB() {
         type === 'text' ? t.text(col) : t.string(col);
       });
     }
-    // Migrar status para aceptar 'reviewing'
-    const hasReviewing = await db('pagos').where('status', 'reviewing').first().catch(() => null);
   }
 
   // pago_cargos
@@ -177,7 +185,47 @@ async function initDB() {
     });
   }
 
-  // uploads (registro de archivos subidos)
+  // multas — evita duplicación del recargo
+  if (!(await db.schema.hasTable('multas'))) {
+    await db.schema.createTable('multas', (t) => {
+      t.increments('id');
+      t.integer('cargo_id').unique().references('id').inTable('cargos_mensuales');
+      t.float('monto_usd').notNullable();
+      t.float('porcentaje').defaultTo(5);
+      t.timestamp('aplicada_en').defaultTo(db.fn.now());
+    });
+  }
+
+  // cargos_extra — cargos manuales únicos por admin
+  if (!(await db.schema.hasTable('cargos_extra'))) {
+    await db.schema.createTable('cargos_extra', (t) => {
+      t.increments('id');
+      t.integer('inscrito_id').references('id').inTable('inscritos');
+      t.integer('representante_id').references('id').inTable('representantes');
+      t.integer('created_by').references('id').inTable('admins');
+      t.string('concepto').notNullable();
+      t.float('monto_usd').notNullable();
+      t.string('mes').notNullable();
+      t.enu('status', ['pending', 'paid']).defaultTo('pending');
+      t.timestamp('created_at').defaultTo(db.fn.now());
+    });
+  }
+
+  // audit_logs — registro de acciones admin
+  if (!(await db.schema.hasTable('audit_logs'))) {
+    await db.schema.createTable('audit_logs', (t) => {
+      t.increments('id');
+      t.integer('admin_id').references('id').inTable('admins');
+      t.string('admin_nombre');
+      t.string('accion').notNullable();
+      t.string('entidad');
+      t.integer('entidad_id');
+      t.text('detalle');
+      t.timestamp('created_at').defaultTo(db.fn.now());
+    });
+  }
+
+  // uploads
   if (!(await db.schema.hasTable('uploads'))) {
     await db.schema.createTable('uploads', (t) => {
       t.increments('id');
@@ -185,34 +233,31 @@ async function initDB() {
       t.string('original_name');
       t.string('mime_type');
       t.integer('size');
-      t.string('entity_type'); // 'representante', 'inscrito', 'comprobante'
+      t.string('entity_type');
       t.integer('entity_id');
       t.timestamp('created_at').defaultTo(db.fn.now());
     });
   }
 
-  // Seed admin
+  // Seeds
   const existingAdmin = await db('admins').where({ email: 'admin@academia.com' }).first();
   if (!existingAdmin) {
     const hash = bcrypt.hashSync('admin123', 10);
     await db('admins').insert({ name: 'Administrador', email: 'admin@academia.com', password: hash });
-    console.log('✅ Admin por defecto creado: admin@academia.com / admin123');
+    console.log('✅ Admin por defecto creado');
   }
 
-  // Seed config institución
   const configCount = await db('config_institucion').count('id as c').first();
   if (configCount.c === 0) {
     await db('config_institucion').insert({ nombre: 'Mi Academia', color_primario: '#0055E6', color_secundario: '#0078F0' });
-    console.log('✅ Configuración de institución creada');
   }
 
-  // Seed categorías
   const catCount = await db('categorias').count('id as c').first();
   if (catCount.c === 0) {
     await db('categorias').insert([
-      { nombre: 'Categoría A', descripcion: 'Nivel básico', monto_usd: 20 },
-      { nombre: 'Categoría B', descripcion: 'Nivel intermedio', monto_usd: 30 },
-      { nombre: 'Categoría C', descripcion: 'Nivel avanzado', monto_usd: 40 },
+      { nombre: 'Categoría A', descripcion: 'Nivel básico', monto_usd: 20, recargo_mora_pct: 5, dias_gracia: 5 },
+      { nombre: 'Categoría B', descripcion: 'Nivel intermedio', monto_usd: 30, recargo_mora_pct: 5, dias_gracia: 5 },
+      { nombre: 'Categoría C', descripcion: 'Nivel avanzado', monto_usd: 40, recargo_mora_pct: 5, dias_gracia: 5 },
     ]);
     console.log('✅ Categorías de ejemplo creadas');
   }

@@ -14,6 +14,9 @@ import cargosRoutes from './routes/cargos.js';
 import pagosRoutes from './routes/pagos.js';
 import uploadsRoutes from './routes/uploads.js';
 import configRoutes from './routes/config.js';
+import dashboardRoutes from './routes/dashboard.js';
+import reportesRoutes from './routes/reportes.js';
+import { iniciarCronJobs } from './services/cronJobs.js';
 import './database.js';
 
 dotenv.config();
@@ -22,7 +25,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS abierto para desarrollo y producción
 app.use(cors({
   origin: [
     'http://localhost:5173',
@@ -33,8 +35,6 @@ app.use(cors({
 }));
 
 app.use(express.json());
-
-// Servir archivos subidos
 app.use('/uploads', express.static(path.resolve(__dirname, '../../uploads')));
 
 app.use('/api/auth', authRoutes);
@@ -48,8 +48,13 @@ app.use('/api/cargos', cargosRoutes);
 app.use('/api/pagos', pagosRoutes);
 app.use('/api/uploads', uploadsRoutes);
 app.use('/api/config', configRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/reportes', reportesRoutes);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', env: process.env.NODE_ENV }));
 app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+
+// Iniciar cron jobs
+iniciarCronJobs();
 
 app.listen(PORT, () => console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`));
